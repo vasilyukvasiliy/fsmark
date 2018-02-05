@@ -1,14 +1,16 @@
 package fsmark
 
 import (
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 func New(path string, duration time.Duration) FSMark {
+	path, _ = filepath.Abs(path)
 	return FSMark{
 		mode:     os.ModePerm,
 		path:     path,
@@ -25,10 +27,10 @@ type FSMark struct {
 }
 
 func (fsm *FSMark) BuildPath(key string) string {
-	bytes := sha256.Sum256([]byte(key))
+	bytes := sha1.Sum([]byte(key))
 	key = hex.EncodeToString(bytes[:])
 
-	return fsm.path + "/" + key[0:4] + "/" + key[4:8] + "/" + key[8:]
+	return fsm.path + "/" + key[0:4] + "/" + key[4:]
 }
 
 func (fsm *FSMark) Clear() (e error) {
@@ -40,9 +42,11 @@ func (fsm *FSMark) Clear() (e error) {
 
 func (fsm *FSMark) Create(key string) (e error) {
 	path := fsm.BuildPath(key)
-	e = fsm.Remove(key)
-	if e != nil {
-		return
+	if _, err := os.Stat(path); err == nil {
+		e = fsm.Remove(key)
+		if e != nil {
+			return
+		}
 	}
 
 	fsm.mutex.Lock()
@@ -64,7 +68,7 @@ func (fsm *FSMark) ExistUnixNano(key string, duration time.Duration) (is bool) {
 
 	fsm.mutex.Lock()
 	if oss, e := os.Stat(path); e == nil {
-		is = (time.Now().UnixNano()-oss.ModTime().UnixNano()) <= int64(duration) || (duration == 0)
+		is = fsm.CheckExpire(oss.ModTime(), time.Now(), duration)
 		fsm.mutex.Unlock()
 		if !is {
 			fsm.Remove(key)
@@ -85,9 +89,7 @@ func (fsm *FSMark) Remove(key string) (e error) {
 }
 
 func (fsm *FSMark) GCDemon(duration time.Duration) {
-	for {
-		fsm.GCDemonCustomDuration(duration, fsm.duration)
-	}
+	fsm.GCDemonCustomDuration(duration, fsm.duration)
 }
 
 func (fsm *FSMark) GCDemonCustomDuration(durationSleep time.Duration, durationGC time.Duration) {
@@ -101,6 +103,35 @@ func (fsm *FSMark) GCUnix(duration time.Duration) {
 	fsm.GCUnixNano(duration * time.Second)
 }
 
+func (fsm *FSMark) CheckExpire(mod, now time.Time, duration time.Duration) bool {
+	return now.UnixNano()-mod.UnixNano() <= int64(duration) || (duration == 0)
+}
+
 func (fsm *FSMark) GCUnixNano(duration time.Duration) {
-	//ToDo: Garbage Collection
+	dropPath := ""
+	filepath.Walk(fsm.path, func(path string, info os.FileInfo, err error) (e error) {
+		if dropPath != path && dropPath != "" {
+			fsm.mutex.Lock()
+			os.RemoveAll(dropPath)
+			fsm.mutex.Unlock()
+		}
+
+		if err != nil || fsm.path == path {
+			return
+		}
+
+		fnLen := len(info.Name())
+		if !info.IsDir() || (fnLen != 4 && fnLen != 36) {
+			os.RemoveAll(path)
+			return
+		}
+
+		if fnLen == 36 {
+			if !fsm.CheckExpire(info.ModTime(), time.Now(), duration) {
+				dropPath = path
+			}
+		}
+
+		return
+	})
 }
