@@ -58,7 +58,7 @@ func TestLock(t *testing.T) {
 		t.Error("Marker should not exist: " + key)
 	}
 
-	for i := 0; i < 80000; i++ {
+	for i := 0; i < 4096; i++ {
 		fsm.Create(strconv.Itoa(i))
 	}
 
