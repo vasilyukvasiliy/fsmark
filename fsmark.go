@@ -8,79 +8,99 @@ import (
 	"time"
 )
 
-func New(s string) FSMark {
+func New(path string, duration time.Duration) FSMark {
 	return FSMark{
-		FileMode: os.ModePerm,
-		Path:     s,
+		mode:     os.ModePerm,
+		path:     path,
 		mutex:    sync.Mutex{},
+		duration: duration,
 	}
 }
 
 type FSMark struct {
-	Path     string
-	FileMode os.FileMode
+	path     string
+	mode     os.FileMode
 	mutex    sync.Mutex
+	duration time.Duration
 }
 
-func (f *FSMark) BuildPath(s string) string {
-	bytes := sha256.Sum256([]byte(s))
-	s = hex.EncodeToString(bytes[:])
+func (fsm *FSMark) BuildPath(key string) string {
+	bytes := sha256.Sum256([]byte(key))
+	key = hex.EncodeToString(bytes[:])
 
-	return f.Path + "/" + s[0:4] + "/" + s[4:8] + "/" + s[8:]
+	return fsm.path + "/" + key[0:4] + "/" + key[4:8] + "/" + key[8:]
 }
 
-func (f *FSMark) Clear() (e error) {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
+func (fsm *FSMark) Clear() (e error) {
+	fsm.mutex.Lock()
+	defer fsm.mutex.Unlock()
 
-	return os.RemoveAll(f.Path)
+	return os.RemoveAll(fsm.path)
 }
 
-func (f *FSMark) Create(s string) (e error) {
-	sb := f.BuildPath(s)
-	e = f.Remove(s)
+func (fsm *FSMark) Create(key string) (e error) {
+	path := fsm.BuildPath(key)
+	e = fsm.Remove(key)
 	if e != nil {
 		return
 	}
 
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
+	fsm.mutex.Lock()
+	defer fsm.mutex.Unlock()
 
-	return os.MkdirAll(sb, f.FileMode)
+	return os.MkdirAll(path, fsm.mode)
 }
 
-func (f *FSMark) Exist(s string) (is bool) {
-	s = f.BuildPath(s)
-
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-
-	if _, e := os.Stat(s); e == nil {
-		is = true
-	}
-
-	return
+func (fsm *FSMark) Exist(key string) (is bool) {
+	return fsm.ExistUnixNano(key, 0)
 }
 
-func (f *FSMark) ExistUnix(s string, i time.Duration) (is bool) {
-	sb := f.BuildPath(s)
+func (fsm *FSMark) ExistUnix(key string, duration time.Duration) (is bool) {
+	return fsm.ExistUnixNano(key, duration*time.Second)
+}
 
-	f.mutex.Lock()
-	if oss, e := os.Stat(sb); e == nil {
-		is = (time.Now().UnixNano() - oss.ModTime().UnixNano()) <= int64(i)
-		f.mutex.Unlock()
+func (fsm *FSMark) ExistUnixNano(key string, duration time.Duration) (is bool) {
+	path := fsm.BuildPath(key)
+
+	fsm.mutex.Lock()
+	if oss, e := os.Stat(path); e == nil {
+		is = (time.Now().UnixNano()-oss.ModTime().UnixNano()) <= int64(duration) || (duration == 0)
+		fsm.mutex.Unlock()
 		if !is {
-			f.Remove(s)
+			fsm.Remove(key)
 		}
+	} else {
+		fsm.mutex.Unlock()
 	}
 
 	return
 }
 
-func (f *FSMark) Remove(s string) (e error) {
-	s = f.BuildPath(s)
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
+func (fsm *FSMark) Remove(key string) (e error) {
+	key = fsm.BuildPath(key)
+	fsm.mutex.Lock()
+	defer fsm.mutex.Unlock()
 
-	return os.RemoveAll(s)
+	return os.RemoveAll(key)
+}
+
+func (fsm *FSMark) GCDemon(duration time.Duration) {
+	for {
+		fsm.GCDemonCustomDuration(duration, fsm.duration)
+	}
+}
+
+func (fsm *FSMark) GCDemonCustomDuration(durationSleep time.Duration, durationGC time.Duration) {
+	for {
+		time.Sleep(durationSleep)
+		fsm.GCUnixNano(durationGC)
+	}
+}
+
+func (fsm *FSMark) GCUnix(duration time.Duration) {
+	fsm.GCUnixNano(duration * time.Second)
+}
+
+func (fsm *FSMark) GCUnixNano(duration time.Duration) {
+	//ToDo: Garbage Collection
 }
