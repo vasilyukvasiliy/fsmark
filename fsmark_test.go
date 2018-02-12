@@ -8,18 +8,55 @@ import (
 	"time"
 )
 
-func TestLock(t *testing.T) {
+func testNew() (*FSMark, error) {
+	tmp, e := ioutil.TempDir("", "FSMark__")
+	if e != nil {
+		return nil, e
+	}
+
+	return New(tmp, os.ModePerm, time.Hour, time.Minute), nil
+}
+
+func TestGC(t *testing.T) {
 	t.Parallel()
 
-	tmp, e := ioutil.TempDir("", "TestLock")
+	fsm, e := testNew()
 	if e != nil {
 		t.Fatal(e)
 	}
 
-	t.Log("TempDir", tmp)
-	fsm := New(tmp, time.Hour)
-	key := "TestLock"
+	key := "TestGC"
+	fsm.CreateUnixNano(key, time.Hour)
+	for i := 0; i < 16; i++ {
+		fsm.CreateUnixNano(strconv.Itoa(i), time.Millisecond)
+	}
 
+	time.Sleep(time.Millisecond * 2)
+
+	fsm.GC()
+
+	for i := 0; i < 16; i++ {
+		if fsm.Exist(strconv.Itoa(i)) {
+			t.Fatal("Marker should not exist: ", i)
+		}
+	}
+
+	if !fsm.Exist(key) {
+		t.Error("Marker not exist: " + key)
+	}
+
+	os.RemoveAll(fsm.path)
+}
+
+func TestFSMark(t *testing.T) {
+	t.Parallel()
+
+	fsm, e := testNew()
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	key := "TestLock"
 	t.Log(fsm.BuildPath(key))
 
 	e = fsm.Create(key)
@@ -31,15 +68,20 @@ func TestLock(t *testing.T) {
 		t.Error("Marker not exist: " + key)
 	}
 
-	if !fsm.ExistUnix(key, 1) {
+	if !fsm.Exist(key) {
 		t.Error("Marker not exist: " + key)
 	}
 
-	if !fsm.ExistUnix(key, time.Second) {
-		t.Error("Marker not exist: " + key)
+	e = fsm.CreateUnixNano(key, 1)
+	if e != nil {
+		t.Fatal(e)
 	}
 
-	e = fsm.Remove(key)
+	if fsm.Exist(key) {
+		t.Error("Marker should not exist: " + key)
+	}
+
+	e = fsm.Delete(key)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -59,12 +101,10 @@ func TestLock(t *testing.T) {
 	}
 
 	for i := 0; i < 4096; i++ {
-		fsm.Create(strconv.Itoa(i))
+		fsm.CreateUnixNano(strconv.Itoa(i), time.Second*10)
 	}
 
-	time.Sleep(1 * time.Second)
-
-	fsm.GCUnixNano(1)
+	fsm.GC()
 
 	e = fsm.Clear()
 	if e != nil {
@@ -75,12 +115,10 @@ func TestLock(t *testing.T) {
 }
 
 func BenchmarkFSMark_Create(b *testing.B) {
-	tmp, e := ioutil.TempDir("", "BenchmarkFSMark_Create")
+	fsm, e := testNew()
 	if e != nil {
 		b.Fatal(e)
 	}
-
-	fsm := New(tmp, time.Hour)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -93,12 +131,10 @@ func BenchmarkFSMark_Create(b *testing.B) {
 }
 
 func BenchmarkFSMark_Exist(b *testing.B) {
-	tmp, e := ioutil.TempDir("", "BenchmarkFSMark_Exist")
+	fsm, e := testNew()
 	if e != nil {
 		b.Fatal(e)
 	}
-
-	fsm := New(tmp, time.Hour)
 
 	for i := 0; i < b.N; i++ {
 		fsm.Create(strconv.Itoa(i))
@@ -115,12 +151,10 @@ func BenchmarkFSMark_Exist(b *testing.B) {
 }
 
 func BenchmarkFSMark_CreateExist(b *testing.B) {
-	tmp, e := ioutil.TempDir("", "BenchmarkFSMark_CreateExist")
+	fsm, e := testNew()
 	if e != nil {
 		b.Fatal(e)
 	}
-
-	fsm := New(tmp, time.Hour)
 
 	b.ReportAllocs()
 	b.ResetTimer()
