@@ -1,3 +1,7 @@
+// Copyright (c) 2018 Vasiliy Vasilyuk <vasilyukvasiliy@gmail.com>
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package fsmark
 
 import (
