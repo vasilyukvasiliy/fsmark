@@ -72,7 +72,7 @@ func (fsm *FSMark) CreateUnixNano(key string, duration time.Duration) (e error) 
 		if err != nil {
 			return err
 		}
-		f.Write([]byte(strconv.FormatInt(time.Now().UTC().UnixNano()+int64(duration), 10)))
+		f.Write([]byte(strconv.FormatInt(timeNowUTCUnixNano()+int64(duration), 10)))
 		f.Close()
 	}
 
@@ -107,7 +107,7 @@ func (fsm *FSMark) Exist(key string) (is bool) {
 			return
 		}
 
-		if timeUtcUnixNano < time.Now().UTC().UnixNano() {
+		if timeUtcUnixNano < timeNowUTCUnixNano() {
 			return
 		}
 
@@ -163,7 +163,6 @@ func (fsm *FSMark) GC() {
 			if len(i) == 0 {
 				fsm.remove(path)
 			}
-
 		} else if length == 36 {
 			bytes, e := ioutil.ReadFile(path)
 			if e != nil {
@@ -175,12 +174,15 @@ func (fsm *FSMark) GC() {
 				return fsm.remove(path)
 			}
 
-			if timeUtcUnixNano < time.Now().UTC().UnixNano() {
+			if timeUtcUnixNano < timeNowUTCUnixNano() {
 				return fsm.remove(path)
 			}
-
 		}
 
 		return
 	})
+}
+
+func timeNowUTCUnixNano() int64 {
+	return time.Now().UTC().UnixNano()
 }
