@@ -15,6 +15,12 @@ import (
 	"time"
 )
 
+const (
+	HashLen     = 64
+	DirNameLen  = 4
+	FileNameLen = HashLen - DirNameLen
+)
+
 func New(path string, mode os.FileMode, duration time.Duration, durationGC time.Duration) *FSMark {
 	path, _ = filepath.Abs(path)
 	return &FSMark{
@@ -37,7 +43,7 @@ func (fsm *FSMark) BuildPath(key string) string {
 	bytes := sha256.Sum256([]byte(key))
 	key = hex.EncodeToString(bytes[:])
 
-	return fsm.path + "/" + key[0:4] + "/" + key[4:]
+	return fsm.path + "/" + key[0:DirNameLen] + "/" + key[DirNameLen:HashLen]
 }
 
 func (fsm *FSMark) Clear() (e error) {
@@ -63,18 +69,16 @@ func (fsm *FSMark) CreateUnixNano(key string, duration time.Duration) (e error) 
 	path := fsm.BuildPath(key)
 	dir := filepath.Dir(path)
 
-	if duration.Nanoseconds() > time.Millisecond.Nanoseconds() {
-		fsm.mutex.Lock()
-		defer fsm.mutex.Unlock()
+	fsm.mutex.Lock()
+	defer fsm.mutex.Unlock()
 
-		os.MkdirAll(dir, fsm.mode)
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, fsm.mode)
-		if err != nil {
-			return err
-		}
-		f.Write([]byte(strconv.FormatInt(timeNowUTCUnixNano()+int64(duration), 10)))
-		f.Close()
+	os.MkdirAll(dir, fsm.mode)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, fsm.mode)
+	if err != nil {
+		return err
 	}
+	f.Write([]byte(strconv.FormatInt(timeNowUTCUnixNano()+int64(duration), 10)))
+	f.Close()
 
 	return
 }
@@ -124,37 +128,31 @@ func (fsm *FSMark) Delete(key string) (e error) {
 
 func (fsm *FSMark) remove(path string) (e error) {
 	fsm.mutex.Lock()
-	defer fsm.mutex.Unlock()
+	e = os.RemoveAll(path)
+	fsm.mutex.Unlock()
 
-	return os.RemoveAll(path)
+	return
 }
 
 func (fsm *FSMark) GCDemon() {
-	fsm.GCDemonCustomDuration(fsm.durationGC)
-}
-
-func (fsm *FSMark) GCDemonCustomDuration(durationSleep time.Duration) {
 	for {
-		time.Sleep(durationSleep)
+		time.Sleep(fsm.durationGC)
 		fsm.GC()
 	}
 }
 
-func (fsm *FSMark) GC() {
-	filepath.Walk(fsm.path, func(path string, info os.FileInfo, err error) (e error) {
+func (fsm *FSMark) GC() error {
+	return filepath.Walk(fsm.path, func(path string, info os.FileInfo, err error) (e error) {
 		if err != nil || fsm.path == path {
-			return
+			return err
 		}
 
 		length := len(info.Name())
-		if (length != 4 && info.IsDir()) || (length == 4 && !info.IsDir()) {
-			fsm.mutex.Lock()
-			os.RemoveAll(path)
-			fsm.mutex.Unlock()
-			return
+		if (length != DirNameLen && info.IsDir()) || (length == DirNameLen && !info.IsDir()) {
+			return fsm.remove(path)
 		}
 
-		if length == 4 {
+		if length == DirNameLen {
 			i, err := ioutil.ReadDir(path)
 			if err != nil {
 				return err
@@ -163,7 +161,7 @@ func (fsm *FSMark) GC() {
 			if len(i) == 0 {
 				fsm.remove(path)
 			}
-		} else if length == 36 {
+		} else if length == FileNameLen {
 			bytes, e := ioutil.ReadFile(path)
 			if e != nil {
 				return fsm.remove(path)

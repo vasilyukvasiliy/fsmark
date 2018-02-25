@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,6 +22,74 @@ func testNew() (*FSMark, error) {
 	return New(tmp, os.ModePerm, time.Hour, time.Minute), nil
 }
 
+func TestFSMark_CompetitiveCreating(t *testing.T) {
+	t.Parallel()
+
+	fsm, e := testNew()
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	wg := sync.WaitGroup{}
+	key := "TestFSMark_CompetitiveCreating"
+	e = fsm.CreateUnixNano(key, time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	for i := 0; i < 64; i++ {
+		go func(t *testing.T, wg *sync.WaitGroup) {
+			wg.Add(1)
+			defer wg.Done()
+			e := fsm.CreateUnixNano(key, time.Second)
+			if e != nil {
+				t.Fatal(e)
+			}
+		}(t, &wg)
+	}
+	time.Sleep(time.Second)
+	wg.Wait()
+
+	os.RemoveAll(fsm.path)
+}
+
+func TestFSMark_CompetitiveCreatingExisting(t *testing.T) {
+	t.Parallel()
+
+	fsm, e := testNew()
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	wg := sync.WaitGroup{}
+	key := "TestFSMark_CompetitiveCreatingExisting"
+	e = fsm.CreateUnixNano(key, time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	for i := 0; i < 64; i++ {
+		go func(t *testing.T, wg *sync.WaitGroup) {
+			wg.Add(1)
+			defer wg.Done()
+			e := fsm.CreateUnixNano(key, time.Second)
+			if e != nil {
+				t.Fatal(e)
+			}
+		}(t, &wg)
+
+		go func(t *testing.T, wg *sync.WaitGroup) {
+			wg.Add(1)
+			defer wg.Done()
+			fsm.Exist(key)
+		}(t, &wg)
+	}
+	time.Sleep(time.Second)
+	wg.Wait()
+
+	os.RemoveAll(fsm.path)
+}
+
 func TestGC(t *testing.T) {
 	t.Parallel()
 
@@ -32,10 +101,10 @@ func TestGC(t *testing.T) {
 	key := "TestGC"
 	fsm.CreateUnixNano(key, time.Hour)
 	for i := 0; i < 16; i++ {
-		fsm.CreateUnixNano(strconv.Itoa(i), time.Millisecond)
+		fsm.CreateUnixNano(strconv.Itoa(i), time.Second)
 	}
 
-	time.Sleep(time.Millisecond * 2)
+	time.Sleep(time.Second * 2)
 
 	fsm.GC()
 
@@ -46,7 +115,7 @@ func TestGC(t *testing.T) {
 	}
 
 	if !fsm.Exist(key) {
-		t.Error("Marker not exist: " + key)
+		t.Fatal("Marker not exist: " + key)
 	}
 
 	os.RemoveAll(fsm.path)
@@ -60,7 +129,7 @@ func TestFSMark(t *testing.T) {
 		t.Fatal(e)
 	}
 
-	key := "TestLock"
+	key := "TestFSMark"
 	t.Log(fsm.BuildPath(key))
 
 	e = fsm.Create(key)
@@ -166,6 +235,43 @@ func BenchmarkFSMark_CreateExist(b *testing.B) {
 		fsm.Create(strconv.Itoa(i))
 		fsm.Exist(strconv.Itoa(i))
 	}
+	b.StopTimer()
+
+	os.RemoveAll(fsm.path)
+}
+
+func BenchmarkFSMark_CompetitiveCreatingExisting(b *testing.B) {
+	fsm, e := testNew()
+	if e != nil {
+		b.Fatal(e)
+	}
+
+	wg := sync.WaitGroup{}
+	key := "BenchmarkFSMark_CompetitiveCreatingExisting"
+	e = fsm.CreateUnixNano(key, time.Hour)
+	if e != nil {
+		b.Fatal(e)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		go func(t *testing.B, wg *sync.WaitGroup, i int) {
+			wg.Add(1)
+			e := fsm.CreateUnixNano(key+strconv.Itoa(i%64), time.Second)
+			if e != nil {
+				t.Fatal(e)
+			}
+			wg.Done()
+		}(b, &wg, i)
+
+		go func(b *testing.B, wg *sync.WaitGroup, i int) {
+			wg.Add(1)
+			fsm.Exist(key + strconv.Itoa(i%64))
+			wg.Done()
+		}(b, &wg, i)
+	}
+	wg.Wait()
 	b.StopTimer()
 
 	os.RemoveAll(fsm.path)
